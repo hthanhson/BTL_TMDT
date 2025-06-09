@@ -28,12 +28,15 @@ import {
   useTheme,
   FormHelperText,
   InputAdornment,
-  Chip
+  Chip,
+  List,
+  ListItem
 } from '@mui/material';
 import { useAuth } from '../contexts/AuthContext';
 import { useCart } from '../contexts/CartContext';
 import OrderService from '../services/OrderService';
 import CouponService from '../services/CouponService';
+import NotificationService from '../services/NotificationService';
 import {
   Payment as PaymentIcon,
   LocalShipping as ShippingIcon,
@@ -42,6 +45,8 @@ import {
   LocalOffer as CouponIcon,
   Check as CheckIcon
 } from '@mui/icons-material';
+import { refreshHeaderNotifications } from '../components/Header';
+import { useNotification } from '../contexts/NotificationContext';
 
 interface DeliveryInfo {
   fullName: string;
@@ -84,10 +89,11 @@ interface Coupon {
 
 const steps = ['Thông tin giao hàng', 'Phương thức thanh toán', 'Xác nhận đơn hàng'];
 
-const Checkout: React.FC = () => {
+const Checkout: React.FC = (): JSX.Element => {
   const navigate = useNavigate();
   const { user } = useAuth();
   const { items, clearCart } = useCart();
+  const { refreshNotifications } = useNotification();
   const theme = useTheme();
   
   const [activeStep, setActiveStep] = useState(0);
@@ -110,12 +116,10 @@ const Checkout: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [orderError, setOrderError] = useState<string | null>(null);
   
-  // Coupon state
   const [couponCode, setCouponCode] = useState('');
   const [couponInfo, setCouponInfo] = useState<CouponInfo | null>(null);
   const [validatingCoupon, setValidatingCoupon] = useState(false);
   
-  // Add user coupons state
   const [userCoupons, setUserCoupons] = useState<Coupon[]>([]);
   const [selectedCoupon, setSelectedCoupon] = useState<string>('');
   const [loadingCoupons, setLoadingCoupons] = useState(false);
@@ -125,13 +129,11 @@ const Checkout: React.FC = () => {
       navigate('/cart');
     }
     
-    // Fetch user coupons when component mounts
     if (user) {
       fetchUserCoupons();
     }
   }, [navigate, items, user]);
 
-  // Add function to fetch user coupons
   const fetchUserCoupons = async () => {
     try {
       setLoadingCoupons(true);
@@ -149,7 +151,6 @@ const Checkout: React.FC = () => {
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
     setDeliveryInfo(prev => ({ ...prev, [name]: value }));
-    // Clear error when field is modified
     if (errors[name as keyof ErrorState]) {
       setErrors(prev => ({ ...prev, [name]: undefined }));
     }
@@ -172,7 +173,6 @@ const Checkout: React.FC = () => {
     }
   };
 
-  // Add function to handle coupon selection from dropdown
   const handleCouponSelection = (e: any) => {
     const selectedValue = e.target.value as string;
     setSelectedCoupon(selectedValue);
@@ -183,7 +183,6 @@ const Checkout: React.FC = () => {
       return;
     }
     
-    // Set the coupon code input to the selected coupon code
     setCouponCode(selectedValue);
   };
 
@@ -200,7 +199,6 @@ const Checkout: React.FC = () => {
       const response = await CouponService.verifyCoupon(codeToVerify, calculateSubtotal());
       
       if (response.data.valid && response.data.coupon) {
-        // Calculate discount amount
         const coupon = response.data.coupon;
         let discountAmount = 0;
         
@@ -322,24 +320,37 @@ const Checkout: React.FC = () => {
       setIsSubmitting(true);
       setOrderError(null);
       
-      // Chuẩn bị dữ liệu đơn hàng
       const orderData = {
         shippingAddress: getFullShippingAddress(),
         paymentMethod,
+        phoneNumber: deliveryInfo.phone,
+        recipientName: deliveryInfo.fullName,
         items: items.map(item => ({
-          productId: item.id,
+          productId: Number(item.id),
           quantity: item.quantity
         })),
         couponCode: couponInfo?.code,
-        total: getFinalTotal() // Include the final total with discount
+        total: getFinalTotal()
       };
       
-      const response = await OrderService.createOrder(orderData);
-      
-      // Order successful - clear cart and navigate to success page
-      clearCart();
-      navigate('/order-success', { state: { orderId: response.data.id } });
-      
+      if (paymentMethod === 'cod' || paymentMethod === 'account_balance') {
+        const response = await OrderService.createOrder(orderData);
+        console.log("refreshHeaderNotifications đang chạy...");
+        try {
+          refreshHeaderNotifications();
+          await refreshNotifications();
+          clearCart();
+        } catch (err) {
+          console.error('Lỗi khi refresh thông báo:', err);
+        }
+        navigate('/order-success', { state: { orderId: response.data.id } });
+      } else if (paymentMethod === 'credit') {
+        const paymentData = { ...orderData };
+        localStorage.setItem('pendingOrder', JSON.stringify(paymentData));
+        const respon = await OrderService.createPay(paymentData);
+        const paymentUrl = respon.data;
+        window.location.href = paymentUrl;
+      }
     } catch (err: any) {
       console.error('Error placing order:', err);
       setOrderError(err.response?.data?.message || 'Đã xảy ra lỗi khi đặt hàng. Vui lòng thử lại.');
@@ -352,7 +363,12 @@ const Checkout: React.FC = () => {
   };
 
   const formatCurrency = (amount: number) => {
-    return `$${amount.toFixed(2)}`;
+    return new Intl.NumberFormat('vi-VN', {
+      style: 'currency',
+      currency: 'VND',
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0
+    }).format(amount);
   };
 
   const calculateSubtotal = () => {
@@ -482,15 +498,15 @@ const Checkout: React.FC = () => {
                   />
                 </Paper>
                 
-                <Paper sx={{ mb: 2, p: 2, border: paymentMethod === 'bank' ? `1px solid ${theme.palette.primary.main}` : 'none' }}>
+                <Paper sx={{ mb: 2, p: 2, border: paymentMethod === 'account_balance' ? `1px solid ${theme.palette.primary.main}` : 'none' }}>
                   <FormControlLabel 
-                    value="bank" 
+                    value="account_balance" 
                     control={<Radio />} 
                     label={
                       <Box>
-                        <Typography variant="subtitle1">Chuyển khoản ngân hàng</Typography>
+                        <Typography variant="subtitle1">Thanh toán bằng số dư tài khoản</Typography>
                         <Typography variant="body2" color="text.secondary">
-                          Chuyển khoản qua ngân hàng, ví điện tử
+                          Sử dụng số dư hiện có trong tài khoản của bạn
                         </Typography>
                       </Box>
                     } 
@@ -503,9 +519,9 @@ const Checkout: React.FC = () => {
                     control={<Radio />} 
                     label={
                       <Box>
-                        <Typography variant="subtitle1">Thẻ tín dụng/Ghi nợ</Typography>
+                        <Typography variant="subtitle1">Thẻ điện tử</Typography>
                         <Typography variant="body2" color="text.secondary">
-                          Thanh toán an toàn với các thẻ Visa, Mastercard, JCB
+                          Thanh toán an toàn với VNPAY
                         </Typography>
                       </Box>
                     } 
@@ -521,7 +537,6 @@ const Checkout: React.FC = () => {
               Mã giảm giá
             </Typography>
             <Paper sx={{ p: 2 }}>
-              {/* Add coupon dropdown selection */}
               {userCoupons.length > 0 && (
                 <FormControl fullWidth sx={{ mb: 2 }}>
                   <InputLabel id="coupon-select-label">Chọn mã giảm giá của bạn</InputLabel>
@@ -560,7 +575,6 @@ const Checkout: React.FC = () => {
                 </FormControl>
               )}
               
-              {/* Manual coupon code input */}
               <Grid container spacing={2} alignItems="center">
                 <Grid item xs>
                   <TextField
@@ -640,7 +654,7 @@ const Checkout: React.FC = () => {
               <Paper sx={{ p: 2, mb: 3 }}>
                 <Typography variant="body1">
                   {paymentMethod === 'cod' && 'Thanh toán khi nhận hàng (COD)'}
-                  {paymentMethod === 'bank' && 'Chuyển khoản ngân hàng'}
+                  {paymentMethod === 'account_balance' && 'Thanh toán bằng số dư tài khoản'}
                   {paymentMethod === 'credit' && 'Thẻ tín dụng/Ghi nợ'}
                 </Typography>
               </Paper>
@@ -654,208 +668,172 @@ const Checkout: React.FC = () => {
                         Mã: {couponInfo.code}
                       </Typography>
                       <Typography variant="body1" fontWeight="bold" color="success.main">
-                        {couponInfo.discountType === 'PERCENTAGE' 
-                          ? `Giảm ${couponInfo.discountValue}%` 
+                        {couponInfo.discountType === 'PERCENTAGE'
+                          ? `Giảm ${couponInfo.discountValue}%`
                           : `Giảm ${formatCurrency(couponInfo.discountValue)}`}
                       </Typography>
                     </Box>
                   </Paper>
                 </>
               )}
-              
-              <Typography variant="subtitle1" gutterBottom>Sản phẩm đã chọn</Typography>
-              <Paper sx={{ p: 2, mb: 3 }}>
-                {items.map((item) => (
-                  <Box key={item.id} sx={{ py: 1, display: 'flex', justifyContent: 'space-between' }}>
-                    <Box display="flex" alignItems="center">
-                      <Box
-                        component="img"
-                        src={item.imageUrl || 'https://via.placeholder.com/50'}
-                        alt={item.name}
-                        sx={{ width: 50, height: 50, objectFit: 'contain', mr: 2 }}
-                      />
-                      <Typography variant="body1">
-                        {item.name} x {item.quantity}
-                      </Typography>
-                    </Box>
-                    <Typography variant="body1" fontWeight="bold">
-                      {formatCurrency(item.price * item.quantity)}
-                    </Typography>
-                  </Box>
-                ))}
-                <Divider sx={{ my: 2 }} />
-                
-                <Box display="flex" justifyContent="space-between">
-                  <Typography variant="body1">Tạm tính</Typography>
-                  <Typography variant="body1">
-                    {formatCurrency(calculateSubtotal())}
-                  </Typography>
-                </Box>
-                
-                {couponInfo && couponInfo.valid && (
-                  <Box display="flex" justifyContent="space-between" sx={{ mt: 1 }}>
-                    <Typography variant="body1" color="success.main">Giảm giá</Typography>
-                    <Typography variant="body1" fontWeight="medium" color="success.main">
-                      -{formatCurrency(couponInfo.discountAmount)}
-                    </Typography>
-                  </Box>
-                )}
-                
-                <Divider sx={{ my: 1.5 }} />
-                <Box display="flex" justifyContent="space-between">
-                  <Typography variant="h6">Tổng tiền</Typography>
-                  <Typography variant="h6" fontWeight="bold" color="error">
-                    {formatCurrency(getFinalTotal())}
-                  </Typography>
-                </Box>
-              </Paper>
-              
-              {orderError && (
-                <Alert severity="error" sx={{ mb: 2 }}>
-                  {orderError}
-                </Alert>
-              )}
             </Grid>
           </Grid>
         );
-      default:
-        return null;
     }
-  };
-
-  const handleCheckout = () => {
-    if (!user) {
-      navigate('/login', { state: { from: '/checkout' } });
-      return;
-    }
-    
-    // Xử lý thanh toán ở đây
-    handleNext();
   };
 
   return (
-    <Container maxWidth="lg" sx={{ py: 4 }}>
-      <Typography variant="h4" gutterBottom>
-        Thanh toán
-      </Typography>
-      
-      {Object.values(errors).some(error => !!error) && (
-        <Alert severity="error" sx={{ mb: 3 }}>
-          {errors.paymentMethod || errors.fullName || errors.phone || errors.address || errors.city || errors.zipCode || errors.country || errors.couponCode}
-        </Alert>
-      )}
-      
-      <Stepper activeStep={activeStep} sx={{ mb: 4 }}>
-        {steps.map((label) => (
-          <Step key={label}>
-            <StepLabel>{label}</StepLabel>
-          </Step>
-        ))}
-      </Stepper>
-      
-      <Grid container spacing={4}>
-        <Grid item xs={12} md={8}>
-          <Paper sx={{ p: 3 }}>
-            {getStepContent(activeStep)}
-            
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 3 }}>
-              <Button 
-                onClick={handleBack}
-                startIcon={<ArrowBackIcon />}
-              >
-                Quay lại
-              </Button>
-              
-              {activeStep === steps.length - 1 ? (
-                <Button
-                  variant="contained"
-                  color="success"
-                  onClick={handlePlaceOrder}
-                  disabled={isSubmitting}
-                  sx={{ 
-                    py: 1,
-                    px: 3,
-                    bgcolor: theme.palette.success.main,
-                    '&:hover': {
-                      bgcolor: theme.palette.success.dark,
-                    }
-                  }}
-                >
-                  {isSubmitting ? 'Đang xử lý...' : 'Xác nhận đặt hàng'}
-                </Button>
-              ) : (
-                <Button
-                  variant="contained"
-                  onClick={handleCheckout}
-                  sx={{ py: 1, px: 3 }}
-                >
-                  Tiến hành thanh toán
-                </Button>
-              )}
-            </Box>
-          </Paper>
-        </Grid>
+    <Container maxWidth="md">
+      <Box sx={{ width: '100%', my: 5 }}>
+        <Typography variant="h4" gutterBottom>
+          Thanh toán
+        </Typography>
         
-        <Grid item xs={12} md={4}>
-          <Paper sx={{ p: 3 }}>
-            <Typography variant="h6" gutterBottom>
-              Tóm tắt đơn hàng
-            </Typography>
-            <Divider sx={{ mb: 2 }} />
-            
-            {items.map((item) => (
-              <Box key={item.id} display="flex" justifyContent="space-between" mb={1}>
-                <Typography variant="body2">
-                  {item.name} x {item.quantity}
-                </Typography>
-                <Typography variant="body2" fontWeight="medium">
-                  {formatCurrency(item.price * item.quantity)}
-                </Typography>
+        <Stepper activeStep={activeStep} sx={{ mb: 4 }}>
+          {steps.map((label) => (
+            <Step key={label}>
+              <StepLabel>{label}</StepLabel>
+            </Step>
+          ))}
+        </Stepper>
+        
+        {orderError && (
+          <Alert severity="error" sx={{ mb: 3 }}>
+            {orderError}
+          </Alert>
+        )}
+        
+        <Grid container spacing={4}>
+          <Grid item xs={12} md={8}>
+            <Paper sx={{ p: 3, mb: { xs: 3, md: 0 } }}>
+              {getStepContent(activeStep)}
+              
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 4 }}>
+                <Button 
+                  startIcon={<ArrowBackIcon />} 
+                  onClick={handleBack}
+                >
+                  {activeStep === 0 ? 'Quay lại giỏ hàng' : 'Quay lại'}
+                </Button>
+                
+                {activeStep === steps.length - 1 ? (
+                  <Button
+                    variant="contained"
+                    color="primary"
+                    onClick={handlePlaceOrder}
+                    disabled={isSubmitting}
+                    endIcon={isSubmitting ? <CircularProgress size={20} /> : null}
+                  >
+                    {isSubmitting ? 'Đang xử lý...' : 'Đặt hàng'}
+                  </Button>
+                ) : (
+                  <Button
+                    variant="contained"
+                    color="primary"
+                    onClick={handleNext}
+                  >
+                    Tiếp tục
+                  </Button>
+                )}
               </Box>
-            ))}
-            
-            <Divider sx={{ my: 2 }} />
-            
-            <Box display="flex" justifyContent="space-between" mb={1}>
-              <Typography>Tạm tính</Typography>
-              <Typography>{formatCurrency(calculateSubtotal())}</Typography>
-            </Box>
-            
-            {couponInfo && couponInfo.valid && (
-              <Box display="flex" justifyContent="space-between" mb={1}>
-                <Typography color="success.main">
-                  Giảm giá ({couponInfo.code})
+            </Paper>
+          </Grid>
+          
+          <Grid item xs={12} md={4}>
+            <Card>
+              <CardContent>
+                <Typography variant="h6" gutterBottom>
+                  Tóm tắt đơn hàng
                 </Typography>
-                <Typography color="success.main">
-                  -{formatCurrency(couponInfo.discountAmount)}
-                </Typography>
-              </Box>
-            )}
-            
-            <Box display="flex" justifyContent="space-between" mb={1}>
-              <Typography>Phí giao hàng</Typography>
-              <Typography>Free</Typography>
-            </Box>
-            <Divider sx={{ my: 1.5 }} />
-            <Box display="flex" justifyContent="space-between">
-              <Typography variant="h6">Tổng thanh toán</Typography>
-              <Typography variant="h6" fontWeight="bold" color="error">
-                {formatCurrency(getFinalTotal())}
-              </Typography>
-            </Box>
-          </Paper>
+                <List disablePadding>
+                  {items.map(item => (
+                    <ListItem key={item.id} sx={{ py: 1, px: 0 }}>
+                      <Grid container>
+                        <Grid item xs={7}>
+                          <Typography variant="body2">
+                            {item.name} × {item.quantity}
+                          </Typography>
+                        </Grid>
+                        <Grid item xs={5} sx={{ textAlign: 'right' }}>
+                          <Typography variant="body2">
+                            {formatCurrency(item.price * item.quantity)}
+                          </Typography>
+                        </Grid>
+                      </Grid>
+                    </ListItem>
+                  ))}
+                  
+                  <Divider sx={{ my: 2 }} />
+                  
+                  <ListItem sx={{ py: 1, px: 0 }}>
+                    <Grid container>
+                      <Grid item xs={7}>
+                        <Typography variant="subtitle1">
+                          Tạm tính
+                        </Typography>
+                      </Grid>
+                      <Grid item xs={5} sx={{ textAlign: 'right' }}>
+                        <Typography variant="subtitle1">
+                          {formatCurrency(calculateSubtotal())}
+                        </Typography>
+                      </Grid>
+                    </Grid>
+                  </ListItem>
+                  
+                  {couponInfo && couponInfo.valid && (
+                    <ListItem sx={{ py: 1, px: 0 }}>
+                      <Grid container>
+                        <Grid item xs={7}>
+                          <Typography variant="subtitle1" color="success.main">
+                            Giảm giá
+                          </Typography>
+                        </Grid>
+                        <Grid item xs={5} sx={{ textAlign: 'right' }}>
+                          <Typography variant="subtitle1" color="success.main">
+                            - {formatCurrency(couponInfo.discountAmount)}
+                          </Typography>
+                        </Grid>
+                      </Grid>
+                    </ListItem>
+                  )}
+                  
+                  <ListItem sx={{ py: 1, px: 0 }}>
+                    <Grid container>
+                      <Grid item xs={7}>
+                        <Typography variant="subtitle1" fontWeight="bold">
+                          Tổng cộng
+                        </Typography>
+                      </Grid>
+                      <Grid item xs={5} sx={{ textAlign: 'right' }}>
+                        <Typography variant="subtitle1" fontWeight="bold">
+                          {formatCurrency(getFinalTotal())}
+                        </Typography>
+                      </Grid>
+                    </Grid>
+                  </ListItem>
+                </List>
+              </CardContent>
+            </Card>
+          </Grid>
         </Grid>
-      </Grid>
+      </Box>
       
-      {/* Add Snackbar for notifications */}
       <Snackbar
         open={openSnackbar}
         autoHideDuration={6000}
         onClose={handleCloseSnackbar}
-        message={success || error}
-      />
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert 
+          onClose={handleCloseSnackbar} 
+          severity={error ? "error" : "success"} 
+          sx={{ width: '100%' }}
+        >
+          {error || success}
+        </Alert>
+      </Snackbar>
     </Container>
   );
 };
 
-export default Checkout; 
+export default Checkout;

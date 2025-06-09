@@ -27,13 +27,14 @@ import {
   Home as HomeIcon
 } from '@mui/icons-material';
 import AdminService from '../../services/AdminService';
+import { Category } from '../../types';
 
 interface ProductFormData {
   id?: string;
   name: string;
   description: string;
   price: string;
-  category: string;
+  categoryId: string;
   stock: string;
   imageFile: File | null;
   imageUrl?: string;
@@ -45,14 +46,14 @@ const ProductForm: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [categories, setCategories] = useState<string[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   
   const [formData, setFormData] = useState<ProductFormData>({
     name: '',
     description: '',
     price: '',
-    category: '',
+    categoryId: '',
     stock: '0',
     imageFile: null
   });
@@ -91,7 +92,7 @@ const ProductForm: React.FC = () => {
             name: product.name,
             description: product.description,
             price: product.price.toString(),
-            category: product.category,
+            categoryId: product.category?.id?.toString() || '',
             stock: product.stock.toString(),
             imageFile: null,
             imageUrl: product.imageUrl
@@ -139,7 +140,7 @@ const ProductForm: React.FC = () => {
       valid = false;
     }
 
-    if (!formData.category) {
+    if (!formData.categoryId) {
       errors.category = 'Category is required';
       valid = false;
     }
@@ -216,11 +217,11 @@ const ProductForm: React.FC = () => {
       productData.append('name', formData.name);
       productData.append('description', formData.description);
       productData.append('price', formData.price);
-      productData.append('category', formData.category);
+      productData.append('categoryId', formData.categoryId);
       productData.append('stock', formData.stock);
       
       if (formData.imageFile) {
-        productData.append('image', formData.imageFile);
+        productData.append('imageFile', formData.imageFile);
       }
       
       if (productId) {
@@ -313,15 +314,15 @@ const ProductForm: React.FC = () => {
               <FormControl fullWidth error={!!formErrors.category}>
                 <InputLabel>Category</InputLabel>
                 <Select
-                  name="category"
-                  value={formData.category}
+                  name="categoryId"
+                  value={formData.categoryId}
                   onChange={handleInputChange}
                   label="Category"
                   required
                 >
                   {categories.map((category) => (
-                    <MenuItem key={category} value={category}>
-                      {category}
+                    <MenuItem key={category.id} value={category.id.toString()}>
+                      {category.name}
                     </MenuItem>
                   ))}
                 </Select>
